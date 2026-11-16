@@ -392,6 +392,15 @@ function parseBlocks(lines, refs, endsWithNewline) {
         while (k < ln.s.length && (ln.s[k] === ' ' || ln.s[k] === '\t')) k++;
       }
       let content = ln.s.slice(k);
+      // A lazy line inside containers keeps its leading whitespace, but
+      // tabs expand from the container column, and four or more leading
+      // spaces lose four: that is the indented-code indent, which cannot
+      // interrupt a paragraph, so it is stripped and the rest stays.
+      if (ln.i > 0 && ln.tabBaseSet) {
+        content = expandLeadingTabs(content, ln.tabBase);
+        const lead = /^ */.exec(content)[0].length;
+        if (lead >= 4) content = content.slice(4);
+      }
       // A lazy setext underline is paragraph text indented by 4 spaces.
       if (/^=+$/.test(content) || /^-+$/.test(content)) content = '    ' + content;
       leaf.lines.push(content);
