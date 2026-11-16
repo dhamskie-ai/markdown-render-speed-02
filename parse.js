@@ -1351,11 +1351,12 @@ function findCodeSpanEnd(src, start, n) {
   return -1;
 }
 
-// Does the text in src[textStart, textEnd) contain a backtick run with
-// no matching closer of the same length inside the text? A run that
-// closes a code span is skipped (with its content); a run with no closer
-// is unmatched. Backslash-escaped backticks do not count.
-function linkTextHasUnmatchedBacktick(src, textStart, textEnd) {
+// Lengths of backtick runs in src[textStart, textEnd) with no matching
+// closer of the same length inside the text. A run that closes a code
+// span is skipped (with its content); a run with no closer contributes
+// its length. Backslash-escaped backticks do not count.
+function linkTextUnmatchedBacktickLengths(src, textStart, textEnd) {
+  const lengths = new Set();
   let j = textStart;
   while (j < textEnd) {
     if (src[j] === '\\' && j + 1 < textEnd && isPunctChar(src[j + 1])) { j += 2; continue; }
@@ -1373,23 +1374,25 @@ function linkTextHasUnmatchedBacktick(src, textStart, textEnd) {
           k += m;
         } else k++;
       }
-      if (found === -1) return true;
-      j = found;
+      if (found === -1) lengths.add(n);
+      else j = found;
+      if (found === -1) j += n;
     } else j++;
   }
-  return false;
+  return lengths;
 }
 
-// Index of the first backtick run at or after fromPos that closes a code
-// span (has a matching run of the same length later), or -1.
-function findNextCodeSpanStart(src, fromPos) {
+// Index of the first backtick run of exactly `len` at or after fromPos
+// that closes a code span (has a matching run of the same length later),
+// or -1.
+function findNextCodeSpanStartOfLength(src, fromPos, len) {
   let j = fromPos;
   while (j < src.length) {
     if (src[j] === '\\' && j + 1 < src.length && isPunctChar(src[j + 1])) { j += 2; continue; }
     if (src[j] === '`') {
       let n = 0;
       while (j + n < src.length && src[j + n] === '`') n++;
-      if (findCodeSpanEnd(src, j + n, n) !== -1) return j;
+      if (n === len && findCodeSpanEnd(src, j + n, n) !== -1) return j;
       j += n;
     } else j++;
   }
@@ -1906,9 +1909,12 @@ function parseInline(src, refs, noExtAutolink) {
   // backtick does not form inside such a region (marked quirk).
   const failedRegions = [];
   // Regions after a link whose text holds an unmatched backtick run:
-  // [endOfLink, startOfNextCodeSpan). Emphasis delimiters inside such a
-  // region are inert (marked quirk; doc-09/16/28/35). No code span after
-  // the link means no suppression at all.
+  // [endOfLink, farthestMatchingRun). Each unmatched run length in the
+  // link text pairs with the next code-span run of the same length after
+  // the link; the region ends at the farthest such run. Emphasis
+  // delimiters inside such a region are inert (marked quirk;
+  // doc-09/16/28/35). No matching run after the link means no
+  // suppression at all.
   const suppressRegions = [];
   let i = 0;
   const n = src.length;
@@ -1950,9 +1956,13 @@ function parseInline(src, refs, noExtAutolink) {
       if (res) {
         flush(); nodes.push(res.node);
         const closeIdx = findBracketEndSimple(src, i + 1);
-        if (closeIdx !== -1 && linkTextHasUnmatchedBacktick(src, i + 2, closeIdx)) {
-          const codeStart = findNextCodeSpanStart(src, res.end);
-          if (codeStart !== -1) suppressRegions.push([res.end, codeStart]);
+        if (closeIdx !== -1) {
+          let suppressEnd = -1;
+          for (const len of linkTextUnmatchedBacktickLengths(src, i + 2, closeIdx)) {
+            const pos = findNextCodeSpanStartOfLength(src, res.end, len);
+            if (pos !== -1) suppressEnd = Math.max(suppressEnd, pos);
+          }
+          if (suppressEnd !== -1) suppressRegions.push([res.end, suppressEnd]);
         }
         i = res.end; continue;
       }
@@ -1967,9 +1977,13 @@ function parseInline(src, refs, noExtAutolink) {
       if (res) {
         flush(); nodes.push(res.node);
         const closeIdx = findBracketEndSimple(src, i);
-        if (closeIdx !== -1 && linkTextHasUnmatchedBacktick(src, i + 1, closeIdx)) {
-          const codeStart = findNextCodeSpanStart(src, res.end);
-          if (codeStart !== -1) suppressRegions.push([res.end, codeStart]);
+        if (closeIdx !== -1) {
+          let suppressEnd = -1;
+          for (const len of linkTextUnmatchedBacktickLengths(src, i + 1, closeIdx)) {
+            const pos = findNextCodeSpanStartOfLength(src, res.end, len);
+            if (pos !== -1) suppressEnd = Math.max(suppressEnd, pos);
+          }
+          if (suppressEnd !== -1) suppressRegions.push([res.end, suppressEnd]);
         }
         i = res.end; continue;
       }
