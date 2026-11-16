@@ -13,7 +13,14 @@ const cases = JSON.parse(raw) as Array<{ id: string; markdown: string }>;
 const rendered = new Array<string>(cases.length);
 for (let k = 0; k < cases.length; k++) {
   const doc = cases[k].markdown;
-  rendered[k] = parse(doc);
+  // Render each case on its own: a document that throws (a parser bug on
+  // one pathological input) must score zero for that case only, never
+  // abort the whole run and zero all 720.
+  try {
+    rendered[k] = parse(doc);
+  } catch {
+    rendered[k] = '';
+  }
 }
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(join(outputDir, 'html.json'), JSON.stringify(rendered));

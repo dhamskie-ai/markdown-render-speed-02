@@ -1456,21 +1456,99 @@ function trimAutolinkEnd(s) {
   return s.slice(0, end);
 }
 
+// Dry run of the processEmphasis pairing over the delimiter runs seen so
+// far plus one hypothetical closer: does that closer pair with an earlier
+// opener? The real list is untouched. Used by the autolink boundary rule:
+// an email followed by a _ run that closes emphasis links in full.
+function closerWouldPair(delims, ch, len, canOpen, canClose) {
+  const ds = [];
+  for (const d of delims) ds.push({ ch: d.ch, len: d.len, canOpen: d.canOpen, canClose: d.canClose });
+  ds.push({ ch, len, canOpen, canClose });
+  const target = ds.length - 1;
+  let paired = false;
+  let i = 0;
+  while (i < ds.length) {
+    const closer = ds[i];
+    if (!closer.canClose || closer.len === 0) { i++; continue; }
+    let oi = -1;
+    for (let j = i - 1; j >= 0; j--) {
+      const op = ds[j];
+      if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
+      if ((op.canOpen && op.canClose) || (closer.canOpen && closer.canClose)) {
+        if ((op.len + closer.len) % 3 === 0 && (op.len % 3 !== 0 || closer.len % 3 !== 0)) continue;
+      }
+      oi = j;
+      break;
+    }
+    if (oi === -1) { i++; continue; }
+    if (i === target) paired = true;
+    const op = ds[oi];
+    const use = op.ch === '~' ? Math.min(op.len, closer.len) : (op.len >= 2 && closer.len >= 2) ? 2 : 1;
+    op.len -= use;
+    closer.len -= use;
+    if (closer.len === 0) i++;
+  }
+  return paired;
+}
+
+// Match an email address at src[pos], the way marked's GFM autolink does.
+// The local part holds only letters, digits, and . + - _; domain labels
+// may contain _ and - inside, and the match must end at a boundary (not
+// a word character, _ or -): when the boundary fails the match backtracks
+// a whole label, so a@b.c.d_ links a@b.c and a@b.c_ links nothing at all.
+// Exception: when the character after the full match is a _ run that
+// closes emphasis against an earlier opener, the full match stands,
+// because marked parses the emphasis content on its own and the closer
+// is invisible to the autolink.
+function matchEmail(src, pos, delims) {
+  const rest = src.slice(pos);
+  const greedyRe = /^[A-Za-z0-9._+-]+@[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)+/;
+  const g = greedyRe.exec(rest);
+  if (!g) return null;
+  const boundedRe = /^[A-Za-z0-9._+-]+@[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)+(?![A-Za-z0-9_-])/;
+  const b = boundedRe.exec(rest);
+  if (!b) return null;
+  if (b[0].length === g[0].length) return g[0];
+  // The boundary failed and the match backtracked a label. If the
+  // character after the greedy match is a _ run that closes emphasis,
+  // the full match stands after all.
+  if (rest[g[0].length] === '_') {
+    const p = pos + g[0].length;
+    let m = 0;
+    while (p + m < src.length && src[p + m] === '_') m++;
+    const before = p - 1 >= 0 ? src[p - 1] : '';
+    const afterRun = p + m < src.length ? src[p + m] : '';
+    const leftFlank = !isUniSpaceChar(afterRun) && (!isUniPunctChar(afterRun) || isUniSpaceChar(before) || isUniPunctChar(before));
+    const rightFlank = !isUniSpaceChar(before) && (!isUniPunctChar(before) || isUniSpaceChar(afterRun) || isUniPunctChar(afterRun));
+    const canOpen = leftFlank && (!rightFlank || isUniPunctChar(before));
+    const canClose = rightFlank && (!leftFlank || isUniPunctChar(afterRun));
+    if (canClose && closerWouldPair(delims, '_', m, canOpen, canClose)) return g[0];
+  }
+  return b[0];
+}
+
 // Try a GFM extended autolink (www., scheme://, email) at src[i].
 // Returns {node, end} or null.
-function tryExtendedAutolink(src, i) {
-  if (i > 0) {
-    const p = src[i - 1];
-    if (!(p === ' ' || p === '\t' || p === '\n' || p === '*' || p === '_' || p === '~' || p === '(' || p === '<')) return null;
-  }
+function tryExtendedAutolink(src, i, delims) {
+  // Inside an <a ...> tag's link context (see inLinkSticky) no extended
+  // autolink is formed at all.
+  if (inLinkSticky) return null;
   const rest = src.slice(i);
-  let m = /^www\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+[^\s<]*/.exec(rest);
-  if (m) {
-    const text = trimAutolinkEnd(m[0]);
-    if (text.length > 4) {
-      return { node: { t: 'link', dest: 'http://' + text, title: null, auto: true, children: [{ t: 'text', s: text }] }, end: i + text.length };
+  // A www. autolink only starts at the start of the string, after
+  // whitespace, or after * _ ~ ( <; after any other character it is part
+  // of a longer word and no link is formed. Scheme and email autolinks
+  // have no such restriction: they link after any preceding character.
+  const wwwOk = i === 0 || src[i - 1] === ' ' || src[i - 1] === '\t' || src[i - 1] === '\n' || src[i - 1] === '*' || src[i - 1] === '_' || src[i - 1] === '~' || src[i - 1] === '(' || src[i - 1] === '<';
+  let m;
+  if (wwwOk) {
+    m = /^www\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+[^\s<]*/.exec(rest);
+    if (m) {
+      const text = trimAutolinkEnd(m[0]);
+      if (text.length > 4) {
+        return { node: { t: 'link', dest: 'http://' + text, title: null, auto: true, children: [{ t: 'text', s: text }] }, end: i + text.length };
+      }
+      return null;
     }
-    return null;
   }
   m = /^(?:https?|ftp):\/\/[^\s<]+/i.exec(rest);
   if (m) {
@@ -1483,33 +1561,34 @@ function tryExtendedAutolink(src, i) {
   // Generic scheme autolink: scheme:email[/single-segment] (mailto:, xmpp:).
   m = /^([A-Za-z][A-Za-z0-9+.-]{1,31}):/.exec(rest);
   if (m) {
-    const after = rest.slice(m[0].length);
-    const em = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(after);
-    if (em) {
-      const nx = after[em[0].length];
-      if (nx !== '-' && nx !== '_' && !(nx !== undefined && isAlnum(nx.charCodeAt(0)))) {
-        let text = m[0] + em[0];
-        const seg = /^\/[^\s<>\/]+/.exec(after.slice(em[0].length));
-        if (seg) text += seg[0];
-        text = trimAutolinkEnd(text);
-        if (text.length > 0) {
-          return { node: { t: 'link', dest: text, title: null, auto: true, children: [{ t: 'text', s: text }] }, end: i + text.length };
-        }
+    const emText = matchEmail(src, i + m[0].length, delims);
+    if (emText) {
+      let text = m[0] + emText;
+      const seg = /^\/[^\s<>\/]+/.exec(rest.slice(m[0].length + emText.length));
+      if (seg) text += seg[0];
+      text = trimAutolinkEnd(text);
+      if (text.length > 0) {
+        return { node: { t: 'link', dest: text, title: null, auto: true, children: [{ t: 'text', s: text }] }, end: i + text.length };
       }
       return null;
     }
   }
-  m = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(rest);
-  if (m) {
-    const nx = rest[m[0].length];
-    if (nx === '-' || nx === '_' || (nx !== undefined && isAlnum(nx.charCodeAt(0)))) return null;
-    const text = trimAutolinkEnd(m[0]);
+  const emText = matchEmail(src, i, delims);
+  if (emText) {
+    const text = trimAutolinkEnd(emText);
     if (text.length > 0) {
       return { node: { t: 'link', dest: 'mailto:' + text, title: null, auto: true, children: [{ t: 'text', s: text }] }, end: i + text.length };
     }
   }
   return null;
 }
+
+// One piece of inline state survives across the whole document, the way
+// marked's lexer keeps it: an <a ...> tag opens link context and only a
+// literal </a> closes it. While it is open, GFM extended autolinks
+// (www., scheme://, bare email) are not formed; angle autolinks and
+// [x](y) links still are. Reset for every document in parse().
+let inLinkSticky = false;
 
 // Scan an inline string into a flat node list, then resolve emphasis.
 function parseInline(src, refs, noExtAutolink) {
@@ -1607,7 +1686,14 @@ function parseInline(src, refs, noExtAutolink) {
       const al = tryAutolink(src, i);
       if (al) { flush(); nodes.push(al.node); i = al.end; continue; }
       const tag = tryHtmlInline(src, i);
-      if (tag) { flush(); nodes.push({ t: 'html', s: tag.s }); i = tag.end; continue; }
+      if (tag) {
+        // An <a ...> tag (literal space after the a) opens link context;
+        // only an exact </a> closes it again. A bare <a>, or a tab or
+        // newline after the a, does not open it.
+        if (/^<a /i.test(tag.s)) inLinkSticky = true;
+        else if (/^<\/a>$/i.test(tag.s)) inLinkSticky = false;
+        flush(); nodes.push({ t: 'html', s: tag.s }); i = tag.end; continue;
+      }
       text += '<';
       i++;
       continue;
@@ -1655,7 +1741,7 @@ function parseInline(src, refs, noExtAutolink) {
       continue;
     }
     if (!noExtAutolink) {
-      const ext = tryExtendedAutolink(src, i);
+      const ext = tryExtendedAutolink(src, i, delims);
       if (ext) { flush(); nodes.push(ext.node); i = ext.end; continue; }
     }
     text += c;
@@ -1842,6 +1928,7 @@ function renderBlocks(blocks, refs, tight) {
 
 // Main entry: render one Markdown document to an HTML string.
 export function parse(src) {
+  inLinkSticky = false;
   src = src.replace(/\r\n?/g, '\n');
   const endsWithNewline = src.endsWith('\n');
   const lines = src.split('\n');
