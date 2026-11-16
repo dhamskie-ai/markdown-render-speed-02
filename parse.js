@@ -1929,7 +1929,11 @@ function parseInline(src, refs, noExtAutolink) {
       flush();
       const node = { t: 'text', s: src.slice(i, i + m) };
       nodes.push(node);
-      const delim = { ch: c, node, len: m, canOpen, canClose };
+      // The character after the run (full code point): a strong whose
+      // closer is followed by a letter or digit stays glued to the
+      // following word — see the _noOuterEm flag in formEmphasis.
+      const afterCh = i + m < n ? String.fromCodePoint(src.codePointAt(i + m)) : '';
+      const delim = { ch: c, node, len: m, canOpen, canClose, after: afterCh };
       for (const r of failedRegions) {
         if (i >= r[0] && i <= r[1]) { delim.failedRegion = r[0]; break; }
       }
@@ -2040,6 +2044,16 @@ function formEmphasis(nodes, delims, oi, ci, use) {
   const clIdx = nodes.indexOf(clNode);
   const children = nodes.slice(opIdx + 1, clIdx);
   const emNode = { t: opener.ch === '~' ? 'del' : (use === 2 ? 'strong' : 'em'), children };
+  // Marked quirk: a '*' strong whose closing '**' can both open and
+  // close while its opening '**' can only open stays glued to the word
+  // after it — but only when a letter or digit actually follows the
+  // closer run (a following '*', punctuation or space lets the outer
+  // em form). Mark the node; the em pairing below refuses any span
+  // that directly holds such a node.
+  if (use === 2 && opener.ch === '*' && closer.canOpen && closer.canClose && opener.canOpen && !opener.canClose
+    && closer.after && /[\p{L}\p{N}]/u.test(closer.after)) {
+    emNode._noOuterEm = true;
+  }
   opener.len -= use;
   closer.len -= use;
   const replacement = [];
@@ -2085,6 +2099,22 @@ function processEmphasis(nodes, delims) {
           }
         }
         if (badCode) continue;
+      }
+      // A '*' em must not swallow a strong marked _noOuterEm (see
+      // formEmphasis): such a strong blocks the em that would directly
+      // contain it, so try an earlier opener instead. Only em pairings
+      // (use 1) are blocked; a strong may still contain such a node,
+      // and a strong nested inside a link does not block the em.
+      if (op.ch === '*' && !(op.len >= 2 && closer.len >= 2)) {
+        const opIdx = nodes.indexOf(op.node);
+        const clIdx = nodes.indexOf(closer.node);
+        if (opIdx !== -1 && clIdx !== -1 && clIdx > opIdx) {
+          let blocked = false;
+          for (let k = opIdx + 1; k < clIdx; k++) {
+            if (nodes[k].t === 'strong' && nodes[k]._noOuterEm) { blocked = true; break; }
+          }
+          if (blocked) continue;
+        }
       }
       openerIdx = j;
       break;
