@@ -16,10 +16,14 @@
 // follows it, the first ')' after the last '(' always ends the paren
 // part, and a later ')' survives only when more content follows it —
 // parse.js trims autolink ends by that rule, not by counting parens.
-// Note on nested emphasis: a '*' strong whose closing '**' can both open
-// and close while its opening '**' can only open stays glued to the word
-// after it, so no outer '*' em may swallow it — parse.js marks such a
-// strong at creation and the em pairing refuses any span holding it.
+// Note on nested emphasis: a '*' em/strong whose closing delimiter can
+// both open and close while its opening delimiter can only open stays
+// glued to the word after it (when a letter or digit follows the closer
+// run), so a glued strong blocks any outer '*' em and a glued em blocks
+// an outer '*' em whose opener run is len >= 2 — parse.js marks such a
+// node and the em pairing refuses any span holding it. A closer run split
+// for a strong leaves its leftover '*' inside the strong when the
+// strong's content ends with such a glued node, outside otherwise.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from './parse.js';

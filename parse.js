@@ -2044,18 +2044,35 @@ function formEmphasis(nodes, delims, oi, ci, use) {
   const clIdx = nodes.indexOf(clNode);
   const children = nodes.slice(opIdx + 1, clIdx);
   const emNode = { t: opener.ch === '~' ? 'del' : (use === 2 ? 'strong' : 'em'), children };
-  // Marked quirk: a '*' strong whose closing '**' can both open and
-  // close while its opening '**' can only open stays glued to the word
-  // after it — but only when a letter or digit actually follows the
-  // closer run (a following '*', punctuation or space lets the outer
-  // em form). Mark the node; the em pairing below refuses any span
-  // that directly holds such a node.
-  if (use === 2 && opener.ch === '*' && closer.canOpen && closer.canClose && opener.canOpen && !opener.canClose
+  // Marked quirk: a '*' em/strong whose closing delimiter can both open
+  // and close while its opening delimiter can only open stays glued to
+  // the word after it — but only when a letter or digit actually follows
+  // the closer run (a following '*', punctuation or space lets the outer
+  // emphasis form). Mark the node; the em pairing below refuses any span
+  // that directly holds such a node (a glued strong blocks any outer em;
+  // a glued em blocks an outer em only when the outer opener is len >= 2).
+  if (opener.ch === '*' && closer.canOpen && closer.canClose && opener.canOpen && !opener.canClose
     && closer.after && /[\p{L}\p{N}]/u.test(closer.after)) {
-    emNode._noOuterEm = true;
+    emNode._glued = true;
   }
   opener.len -= use;
   closer.len -= use;
+  // When a closer run is split for a strong and the strong's content ends
+  // with a glued emphasis node, the leftover '*' stays inside the strong
+  // (it is the run's first characters, glued to the content); otherwise
+  // the leftover stays outside as a separate text node.
+  let leftoverInside = false;
+  if (use === 2 && closer.len > 0 && opener.ch === '*') {
+    for (let k = children.length - 1; k >= 0; k--) {
+      const nd = children[k];
+      if (nd.t === 'em' || nd.t === 'strong') { if (nd._glued) leftoverInside = true; break; }
+      if (nd.t !== 'text') break;
+    }
+  }
+  if (leftoverInside) {
+    children.push({ t: 'text', s: clNode.s.slice(0, closer.len) });
+    closer.len = 0;
+  }
   const replacement = [];
   if (opener.len > 0) { opNode.s = opNode.s.slice(0, opener.len); replacement.push(opNode); }
   replacement.push(emNode);
@@ -2100,18 +2117,20 @@ function processEmphasis(nodes, delims) {
         }
         if (badCode) continue;
       }
-      // A '*' em must not swallow a strong marked _noOuterEm (see
-      // formEmphasis): such a strong blocks the em that would directly
-      // contain it, so try an earlier opener instead. Only em pairings
-      // (use 1) are blocked; a strong may still contain such a node,
-      // and a strong nested inside a link does not block the em.
+      // A '*' em must not swallow a glued node (see formEmphasis): a
+      // glued strong blocks any outer em, and a glued em blocks an outer
+      // em whose opener run is len >= 2 — so try an earlier opener
+      // instead. A strong may still contain such a node, and a node
+      // nested inside a link does not block the em.
       if (op.ch === '*' && !(op.len >= 2 && closer.len >= 2)) {
         const opIdx = nodes.indexOf(op.node);
         const clIdx = nodes.indexOf(closer.node);
         if (opIdx !== -1 && clIdx !== -1 && clIdx > opIdx) {
           let blocked = false;
           for (let k = opIdx + 1; k < clIdx; k++) {
-            if (nodes[k].t === 'strong' && nodes[k]._noOuterEm) { blocked = true; break; }
+            const nd = nodes[k];
+            if (nd.t === 'strong' && nd._glued) { blocked = true; break; }
+            if (nd.t === 'em' && nd._glued && op.len >= 2) { blocked = true; break; }
           }
           if (blocked) continue;
         }
