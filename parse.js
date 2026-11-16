@@ -1292,6 +1292,10 @@ function findCodeSpanEnd(src, start, n) {
 
 // Find the ']' matching the '[' at src[i]. Bracket depth is tracked and
 // code spans and backslash escapes are skipped. Returns -1 when unmatched.
+// A backtick run with no later backtick at all swallows the rest of the
+// line: the closing bracket is never found, so no link is formed. Any
+// later backtick run (even of a different length) ends the span for
+// bracket scanning, and scanning continues after it.
 function findClosingBracket(src, i) {
   let depth = 1;
   let j = i + 1;
@@ -1301,9 +1305,19 @@ function findClosingBracket(src, i) {
     if (c === '`') {
       let n = 0;
       while (j + n < src.length && src[j + n] === '`') n++;
-      const end = findCodeSpanEnd(src, j + n, n);
-      if (end === -1) { j += n; continue; }
-      j = end;
+      let k = j + n;
+      let found = -1;
+      while (k < src.length) {
+        if (src[k] === '`') {
+          let m = 0;
+          while (k + m < src.length && src[k + m] === '`') m++;
+          found = k + m;
+          break;
+        }
+        k++;
+      }
+      if (found === -1) return -1;
+      j = found;
       continue;
     }
     if (c === '<') {
