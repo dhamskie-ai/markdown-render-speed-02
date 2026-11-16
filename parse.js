@@ -162,6 +162,43 @@ function advanceCols(ln, n) {
   }
 }
 
+// Like advanceCols, but a tab that straddles the boundary is deleted
+// entirely instead of being replaced by spaces. A fenced code block's
+// own indent is stripped this way: a tab the strip lands on vanishes,
+// and a tab after the strip stays literal.
+function advanceColsDropTab(ln, n) {
+  while (n > 0 && ln.i < ln.s.length) {
+    const ch = ln.s[ln.i];
+    if (ch === ' ') { ln.i++; ln.col++; n--; }
+    else if (ch === '\t') {
+      const w = 4 - (ln.col % 4);
+      if (w <= n) { ln.i++; ln.col += w; n -= w; }
+      else {
+        ln.s = ln.s.slice(0, ln.i) + ln.s.slice(ln.i + 1);
+        n = 0;
+      }
+    } else break;
+  }
+}
+
+// Expand the tabs in the leading whitespace of s to spaces, where the
+// first character of s sits at column base (the columns already
+// consumed for containers, counted the way marked counts them). A tab
+// advances to the next multiple of 4. Tabs after the first
+// non-whitespace character are left alone.
+function expandLeadingTabs(s, base) {
+  let out = '';
+  let col = base;
+  let k = 0;
+  while (k < s.length) {
+    const ch = s[k];
+    if (ch === ' ') { out += ' '; col++; k++; }
+    else if (ch === '\t') { const w = 4 - (col % 4); out += ' '.repeat(w); col += w; k++; }
+    else break;
+  }
+  return out + s.slice(k);
+}
+
 // Skip one optional space (a space, or a tab counted as one column).
 function skipOneSpace(ln) {
   if (ln.i < ln.s.length && (ln.s[ln.i] === ' ' || ln.s[ln.i] === '\t')) advanceCols(ln, 1);
@@ -175,7 +212,12 @@ function parseBlocks(lines, refs, endsWithNewline) {
   const doc = newBlock('doc');
   const stack = [doc];
   for (let li = 0; li < lines.length; li++) {
-    const ln = { s: lines[li], i: 0, col: 0 };
+    const ln = { s: lines[li], i: 0, col: 0, tabBase: 0, tabBaseSet: false };
+    // tabBase is the column marked counts a leading tab from: the
+    // outermost blockquote counts as its leading indent plus 2 (the '>'
+    // and its following space slot), a deeper quote adds only its
+    // leading indent, and a list item adds its indent. tabBaseSet is
+    // true once any container was consumed on this line.
     // Whether the line after this one is blank (or we are at EOF without a
     // trailing newline): an HTML block ending on this line gets no trailing
     // newline in that case.
@@ -202,7 +244,17 @@ function parseBlocks(lines, refs, endsWithNewline) {
           advanceCols(ln, ind);
           if (ln.s[ln.i] === '>') {
             ln.i++; ln.col++;
-            skipOneSpace(ln);
+            // The outermost blockquote counts as its leading indent
+            // plus 2 for the tab column; a deeper quote adds only its
+            // leading indent.
+            const outermost = !ln.tabBaseSet;
+            if (outermost) { ln.tabBase = ind + 2; ln.tabBaseSet = true; }
+            else ln.tabBase += ind;
+            // Only the outermost quote may spend a tab as its one
+            // optional space; a deeper quote leaves the tab for the
+            // content, where it expands from tabBase instead.
+            if (ln.s[ln.i] === ' ') { ln.i++; ln.col++; }
+            else if (ln.s[ln.i] === '\t' && outermost) skipOneSpace(ln);
             j++;
             continue;
           }
@@ -217,7 +269,13 @@ function parseBlocks(lines, refs, endsWithNewline) {
           continue;
         }
         const ind = countIndent(ln);
-        if (ind >= b.indent) { advanceCols(ln, b.indent); j++; continue; }
+        if (ind >= b.indent) {
+          advanceCols(ln, b.indent);
+          // A list item adds its indent to the tab column.
+          ln.tabBase += b.indent;
+          ln.tabBaseSet = true;
+          j++; continue;
+        }
         if (inFenced) {
           // A fenced code block with no content yet does not keep the
           // item open for a line below the item's indent: the block
@@ -354,14 +412,14 @@ function parseBlocks(lines, refs, endsWithNewline) {
         ln.i = saveI; ln.col = saveCol;
       }
       const strip = Math.min(ind, leaf.fenceInd || 0);
-      advanceCols(ln, strip);
+      advanceColsDropTab(ln, strip);
       let content = ln.s.slice(ln.i);
-      // A tab the indent stripping lands on expands to spaces: the
-      // stripping consumed columns (container or fence indent), so the
-      // tab aligns to the next multiple of 4 from the absolute column.
-      if (ln.col > 0 && content.charCodeAt(0) === 9) {
-        const w = 4 - (ln.col % 4);
-        content = ' '.repeat(w) + content.slice(1);
+      // Expand leading tabs the way marked does, but only when the line
+      // passed through a container: a bare fenced code block keeps tabs
+      // literal. The column counts the container base plus the fence's
+      // own indent.
+      if (ln.tabBaseSet) {
+        content = expandLeadingTabs(content, ln.tabBase + (leaf.fenceInd || 0));
       }
       leaf.lines.push(content);
       continue;
@@ -685,6 +743,17 @@ function ensureNotListTop(stack, refs) {
 
 function openNewBlocks(ln, stack, refs, lazy) {
   while (true) {
+    // Expand leading tabs from the container-aware column before any
+    // block-start decision: inside a blockquote or list item a tab does
+    // not start at the absolute column, so the absolute expansion would
+    // misplace it (a paragraph would turn into indented code, or the
+    // paragraph text would keep a literal tab). The tab base grows as
+    // containers open below, so this runs at the top of every pass.
+    if (ln.tabBaseSet) {
+      const rest = ln.s.slice(ln.i);
+      const expanded = expandLeadingTabs(rest, ln.tabBase);
+      if (expanded !== rest) ln.s = ln.s.slice(0, ln.i) + expanded;
+    }
     // A marker line whose remainder is blank opens nothing further.
     if (isBlankRemainder(ln)) return;
     const cont = stack[stack.length - 1];
@@ -861,6 +930,9 @@ function openNewBlocks(ln, stack, refs, lazy) {
         ln.i += lm.markerWidth;
         ln.col += lm.markerWidth;
         advanceCols(ln, lm.contentIndent - ind - lm.markerWidth);
+        // A list item adds its indent to the tab column.
+        ln.tabBase += lm.contentIndent;
+        ln.tabBaseSet = true;
         continue;
       }
     }
@@ -872,7 +944,15 @@ function openNewBlocks(ln, stack, refs, lazy) {
         ensureNotListTop(stack, refs);
         closePara(stack, refs);
         ln.i++; ln.col++;
-        skipOneSpace(ln);
+        // The outermost blockquote counts as its leading indent plus 2
+        // for the tab column; a deeper quote adds only its leading
+        // indent. Only the outermost quote may spend a tab as its one
+        // optional space.
+        const outermost = !ln.tabBaseSet;
+        if (outermost) { ln.tabBase = ind + 2; ln.tabBaseSet = true; }
+        else ln.tabBase += ind;
+        if (ln.s[ln.i] === ' ') { ln.i++; ln.col++; }
+        else if (ln.s[ln.i] === '\t' && outermost) skipOneSpace(ln);
         const q = newBlock('quote');
         addChild(stack, stack[stack.length - 1], q);
         stack.push(q);
