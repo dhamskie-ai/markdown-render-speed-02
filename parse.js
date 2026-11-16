@@ -220,10 +220,12 @@ function parseBlocks(lines, refs, endsWithNewline) {
     // its own, so a list item outside the quote does not count. A list
     // item ADDS its indent. tabBaseSet is true once any container was
     // consumed on this line.
-    // Whether the line after this one is blank (or we are at EOF without a
-    // trailing newline): an HTML block ending on this line gets no trailing
-    // newline in that case.
-    ln.nextBlank = li + 1 >= lines.length ? !endsWithNewline : /^[ \t]*$/.test(lines[li + 1]);
+    // Whether the line after this one is truly empty (or we are at EOF
+    // without a trailing newline): an HTML block ending on this line
+    // gets no trailing newline in that case. A whitespace-only next
+    // line (spaces or a tab) does NOT suppress it: marked still emits
+    // the newline after a comment block followed by such a line.
+    ln.nextBlank = li + 1 >= lines.length ? !endsWithNewline : lines[li + 1] === '';
     // True only when this line is the last one and the source has no
     // trailing newline: an HTML block ending here gets no trailing
     // newline. (nextBlank is also true when the following line is
@@ -332,7 +334,10 @@ function parseBlocks(lines, refs, endsWithNewline) {
     if (!lazy) {
       while (stack.length > j) {
         const popped = stack.pop();
-        if (popped.t === 'html') popped.noTrail = true;
+        // An HTML block closed because its container ends on a blank
+        // line gets no trailing newline; one closed on a content line
+        // keeps it.
+        if (popped.t === 'html') popped.noTrail = isBlankRemainder(ln);
         finalize(popped, stack[stack.length - 1], refs);
       }
     }
