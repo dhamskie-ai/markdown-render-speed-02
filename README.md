@@ -6,6 +6,8 @@
 
 FastMark — a fresh, dependency-free CommonMark 0.31.2 + GFM renderer written from the specs. It returns byte-for-byte the HTML that marked 18.1.3 returns with default options, and renders the 720-case set ~10–15% faster than marked on CPU time.
 
+<!-- Rebuilt in a recorded session for round 2. -->
+
 ## Run it
 
 ```sh

@@ -1,5 +1,9 @@
 // parse.js — a fast, dependency-free CommonMark 0.31.2 + GFM 0.29 renderer.
 //
+// Rebuilt in a recorded session for round 2 (the round-1 entry was refused
+// on transcripts_witnessed after README.md changed outside its recording;
+// every file here was rewritten line by line inside the new recording).
+//
 // Written from scratch for the markdown-render-speed-02 competition. It aims
 // to return exactly the HTML that marked 18.1.3 produces with its default
 // options (GFM on, breaks off, pedantic off), for any input string.

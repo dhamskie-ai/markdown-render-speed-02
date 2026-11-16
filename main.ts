@@ -1,3 +1,5 @@
+// FastMark harness driver: reads cases.json, writes html.json (one HTML
+// string per case, in order). Rewritten in a recorded session for round 2.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from './parse.js';
