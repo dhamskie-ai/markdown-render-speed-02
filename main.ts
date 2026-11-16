@@ -24,6 +24,12 @@
 // node and the em pairing refuses any span holding it. A closer run split
 // for a strong leaves its leftover '*' inside the strong when the
 // strong's content ends with such a glued node, outside otherwise.
+// Note on HTML block trailing newlines: a one-line comment block (or any
+// HTML block closed on its line) gets no trailing newline when the next
+// line is truly empty — and a next line made only of blockquote markers
+// counts as empty while a quote is open, because marked treats it as the
+// quote's blank line. At top level the same '>' line would start a new
+// blockquote, so it only counts inside a quote.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from './parse.js';

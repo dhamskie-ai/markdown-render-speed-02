@@ -255,6 +255,20 @@ function reachesCode(ln, stack, k) {
   return false;
 }
 
+// True when the line after li is blank inside a blockquote: it consists
+// only of blockquote markers (and whitespace). Marked treats such a line
+// as the quote's blank line, so an HTML block ending on li gets no
+// trailing newline — the same as when the next line is truly empty.
+// Only applies while a quote is open; at top level a '>' line starts a
+// new blockquote instead of being blank.
+function nextBlankQuoteLine(lines, li, stack) {
+  if (li + 1 >= lines.length) return false;
+  let inQuote = false;
+  for (const b of stack) if (b.t === 'quote') { inQuote = true; break; }
+  if (!inQuote) return false;
+  return /^ {0,3}(>[ \t]?)+[ \t]*$/.test(lines[li + 1]);
+}
+
 function parseBlocks(lines, refs, endsWithNewline) {
   const doc = newBlock('doc');
   const stack = [doc];
@@ -528,7 +542,7 @@ function parseBlocks(lines, refs, endsWithNewline) {
     if (leaf.t === 'html') {
       leaf.lines.push(ln.s.slice(ln.i));
       if (leaf.htmlEnd && leaf.htmlEnd.test(ln.s.slice(ln.i))) {
-        leaf.noTrail = ln.nextBlank;
+        leaf.noTrail = ln.nextBlank || nextBlankQuoteLine(lines, li, stack);
         finalize(stack.pop(), stack[stack.length - 1], refs);
       }
       continue;
@@ -547,7 +561,7 @@ function parseBlocks(lines, refs, endsWithNewline) {
         continue;
       }
     }
-    openNewBlocks(ln, stack, refs, lazy);
+    openNewBlocks(ln, stack, refs, lazy, lines, li);
   }
   while (stack.length > 1) {
     const b = stack.pop();
@@ -817,7 +831,7 @@ function ensureNotListTop(stack, refs) {
   }
 }
 
-function openNewBlocks(ln, stack, refs, lazy) {
+function openNewBlocks(ln, stack, refs, lazy, lines, li) {
   while (true) {
     // Expand leading tabs from the container-aware column before any
     // block-start decision: inside a blockquote or list item a tab does
@@ -944,7 +958,7 @@ function openNewBlocks(ln, stack, refs, lazy) {
         // <style>...</style> or <!-- ... -->): then the block is complete
         // at once, so finalize it here instead of pushing it open.
         if (h.htmlEnd && h.htmlEnd.test(h.lines[0])) {
-          h.noTrail = ln.nextBlank;
+          h.noTrail = ln.nextBlank || nextBlankQuoteLine(lines, li, stack);
           finalize(h, stack[stack.length - 1], refs);
         } else {
           stack.push(h);
