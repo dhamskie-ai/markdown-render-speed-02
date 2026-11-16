@@ -1,17 +1,19 @@
-// FastMark harness driver: reads cases.json, writes html.json (one HTML
-// string per case, in order). Rewritten in a recorded session for round 2.
+// SPDX-License-Identifier: MIT
+// FastMark driver: reads every case, renders it with parse, writes html.json.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from './parse.js';
 
-const inputDir = process.env.MAKEFUN_INPUT_DIR || '/input';
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+const inputDir = process.env.MAKEFUN_INPUT_DIR ?? '/input';
+const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-const cases = JSON.parse(readFileSync(join(inputDir, 'cases.json'), 'utf8'));
-const html = [];
-for (let i = 0; i < cases.length; i++) {
-  html.push(parse(cases[i].markdown));
+const raw = readFileSync(join(inputDir, 'cases.json'), 'utf8');
+// cases.json is an array of { id, markdown } objects, in grading order.
+const cases = JSON.parse(raw) as Array<{ id: string; markdown: string }>;
+const rendered = new Array<string>(cases.length);
+for (let k = 0; k < cases.length; k++) {
+  const doc = cases[k].markdown;
+  rendered[k] = parse(doc);
 }
-
 mkdirSync(outputDir, { recursive: true });
-writeFileSync(join(outputDir, 'html.json'), JSON.stringify(html));
+writeFileSync(join(outputDir, 'html.json'), JSON.stringify(rendered));
