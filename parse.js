@@ -1294,6 +1294,24 @@ function findCodeSpanEnd(src, start, n) {
   return -1;
 }
 
+// Find the ']' matching the '[' at src[i], counting brackets only
+// (backslash escapes skipped, code spans ignored). Used only to mark
+// failed-link regions for emphasis suppression; findClosingBracket
+// may refuse a link whose text holds a bad code span, but the ']' is
+// still there for region purposes.
+function findBracketEndSimple(src, i) {
+  let depth = 1;
+  let j = i + 1;
+  while (j < src.length) {
+    const c = src[j];
+    if (c === '\\' && j + 1 < src.length && isPunctChar(src[j + 1])) { j += 2; continue; }
+    if (c === '[') depth++;
+    else if (c === ']') { depth--; if (depth === 0) return j; }
+    j++;
+  }
+  return -1;
+}
+
 // Find the ']' matching the '[' at src[i]. Bracket depth is tracked and
 // code spans and backslash escapes are skipped. Returns -1 when unmatched.
 function findClosingBracket(src, i) {
@@ -1736,6 +1754,10 @@ let inLinkSticky = false;
 function parseInline(src, refs, noExtAutolink) {
   const nodes = [];
   const delims = [];
+  // Regions of link text whose link failed to form: [startOfBracket,
+  // closingBracket]. Emphasis around a code span whose content holds a
+  // backtick does not form inside such a region (marked quirk).
+  const failedRegions = [];
   let i = 0;
   const n = src.length;
   let text = '';
@@ -1774,6 +1796,8 @@ function parseInline(src, refs, noExtAutolink) {
     if (c === '!' && src[i + 1] === '[') {
       const res = tryParseLink(src, i + 1, refs, true);
       if (res) { flush(); nodes.push(res.node); i = res.end; continue; }
+      const close = findBracketEndSimple(src, i + 1);
+      if (close !== -1) failedRegions.push([i + 1, close]);
       text += '!';
       i++;
       continue;
@@ -1781,6 +1805,8 @@ function parseInline(src, refs, noExtAutolink) {
     if (c === '[') {
       const res = tryParseLink(src, i, refs, false);
       if (res) { flush(); nodes.push(res.node); i = res.end; continue; }
+      const close = findBracketEndSimple(src, i);
+      if (close !== -1) failedRegions.push([i, close]);
       text += '[';
       i++;
       continue;
@@ -1801,7 +1827,11 @@ function parseInline(src, refs, noExtAutolink) {
       flush();
       const node = { t: 'text', s: src.slice(i, i + m) };
       nodes.push(node);
-      delims.push({ ch: c, node, len: m, canOpen, canClose });
+      const delim = { ch: c, node, len: m, canOpen, canClose };
+      for (const r of failedRegions) {
+        if (i >= r[0] && i <= r[1]) { delim.failedRegion = r[0]; break; }
+      }
+      delims.push(delim);
       i += m;
       continue;
     }
@@ -1924,6 +1954,12 @@ function formEmphasis(nodes, delims, oi, ci, use) {
 
 // Walk the delimiter list left to right, pairing each closer with the
 // nearest earlier opener of the same character.
+//
+// Failed-link suppression: inside link text whose link did not form,
+// emphasis does not pair across a code span whose content holds a
+// backtick (marked quirk; doc-16/20/23). The opener and closer must
+// sit in the same failed-link region (recorded on the delimiters by
+// parseInline).
 function processEmphasis(nodes, delims) {
   let i = 0;
   while (i < delims.length) {
@@ -1935,6 +1971,18 @@ function processEmphasis(nodes, delims) {
       if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
       if ((op.canOpen && op.canClose) || (closer.canOpen && closer.canClose)) {
         if ((op.len + closer.len) % 3 === 0 && (op.len % 3 !== 0 || closer.len % 3 !== 0)) continue;
+      }
+      if (op.failedRegion !== undefined && closer.failedRegion !== undefined && op.failedRegion === closer.failedRegion) {
+        const opIdx = nodes.indexOf(op.node);
+        const clIdx = nodes.indexOf(closer.node);
+        let badCode = false;
+        if (opIdx !== -1 && clIdx !== -1 && clIdx > opIdx) {
+          for (let k = opIdx + 1; k < clIdx; k++) {
+            const nd = nodes[k];
+            if (nd.t === 'code' && nd.s.includes('`')) { badCode = true; break; }
+          }
+        }
+        if (badCode) continue;
       }
       openerIdx = j;
       break;
