@@ -1295,6 +1295,8 @@ function findCodeSpanEnd(src, start, n) {
 function findClosingBracket(src, i) {
   let depth = 1;
   let j = i + 1;
+  let sawCodeSpan = false;
+  let openTick = false;
   while (j < src.length) {
     const c = src[j];
     if (c === '\\' && j + 1 < src.length && isPunctChar(src[j + 1])) { j += 2; continue; }
@@ -1302,8 +1304,27 @@ function findClosingBracket(src, i) {
       let n = 0;
       while (j + n < src.length && src[j + n] === '`') n++;
       const end = findCodeSpanEnd(src, j + n, n);
-      if (end === -1) { j += n; continue; }
-      j = end;
+      if (end !== -1) {
+        // A code span that swallows the link destination '](' cannot be a
+        // code span inside this link text: the ']' before it closes the
+        // link. Do not skip such a span; let the ']' be found normally.
+        if (src.slice(j, end).includes('](')) { j += n; continue; }
+        sawCodeSpan = true;
+        openTick = false;
+        j = end;
+        continue;
+      }
+      // No same-length closer. A run that follows an unmatched opener
+      // loosely closes it; a run with no backtick after it at all (and
+      // no code span closed yet) leaves the link text unterminated.
+      if (openTick) { openTick = false; j += n; continue; }
+      let laterTick = false;
+      for (let k = j + n; k < src.length; k++) {
+        if (src[k] === '`') { laterTick = true; break; }
+      }
+      if (!laterTick && !sawCodeSpan) return -1;
+      openTick = laterTick;
+      j += n;
       continue;
     }
     if (c === '<') {
