@@ -1327,15 +1327,17 @@ function findClosingBracket(src, i) {
         continue;
       }
       // No same-length closer. A run that follows an unmatched opener
-      // loosely closes it; a run with no backtick after it at all
-      // leaves the link text unterminated (a stray backtick after a
-      // closed code span still kills the link).
+      // loosely closes it; a run with no backtick after it at all (and
+      // no code span closed yet) leaves the link text unterminated.
+      // A stray backtick AFTER a closed code span is literal text and
+      // does not kill the link (doc-05/10/33 form their links this
+      // way); a stray backtick with no code span closed yet does.
       if (openTick) { openTick = false; j += n; continue; }
       let laterTick = false;
       for (let k = j + n; k < src.length; k++) {
         if (src[k] === '`') { laterTick = true; break; }
       }
-      if (!laterTick) return -1;
+      if (!laterTick && !sawCodeSpan) return -1;
       openTick = laterTick;
       j += n;
       continue;
