@@ -1318,9 +1318,10 @@ function findClosingBracket(src, i) {
         if (spanText.includes('](') && spanText.includes('\n')) { j += n; continue; }
         // Marked quirk (black-box probes): a code span whose content
         // contains a backtick run of a DIFFERENT length than its own
-        // delimiter kills the link (e.g. text "`` a ` b ``" never
-        // forms a link). A backtick of the SAME length inside the
-        // content does not (doc-05's "`a ` b`" still forms its link).
+        // delimiter kills the link -- UNLESS the span is the last thing
+        // in the link text, immediately followed by ']'. A backtick of
+        // the same length inside the content does not kill it either
+        // (doc-05's "`a ` b`" still forms its link).
         const spanContent = src.slice(j + n, end - n);
         let badTick = false;
         for (let q = 0; q < spanContent.length; q++) {
@@ -1331,7 +1332,7 @@ function findClosingBracket(src, i) {
             q += m - 1;
           }
         }
-        if (badTick) return -1;
+        if (badTick && src[end] !== ']') return -1;
         sawCodeSpan = true;
         openTick = false;
         j = end;
