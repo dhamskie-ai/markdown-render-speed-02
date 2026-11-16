@@ -1920,6 +1920,12 @@ function formEmphasis(nodes, delims, oi, ci, use) {
   const clIdx = nodes.indexOf(clNode);
   const children = nodes.slice(opIdx + 1, clIdx);
   const emNode = { t: opener.ch === '~' ? 'del' : (use === 2 ? 'strong' : 'em'), children };
+  // Remember whether the closer could both open and close, and its
+  // length: a just-formed inner pair whose closer could do both blocks
+  // a later lone closer from pairing with an inner opener (marked
+  // quirk, verified by black-box probes).
+  emNode._closerBoth = closer.canOpen && closer.canClose;
+  emNode._closerLen = closer.len;
   opener.len -= use;
   closer.len -= use;
   const replacement = [];
@@ -1937,23 +1943,59 @@ function formEmphasis(nodes, delims, oi, ci, use) {
 // Walk the delimiter list left to right, pairing each closer with the
 // nearest earlier opener of the same character.
 //
-// Failed-link suppression: inside link text whose link did not form,
-// emphasis does not pair across a code span whose content holds a
-// backtick (marked quirk; doc-16/20/23). The opener and closer must
-// sit in the same failed-link region (recorded on the delimiters by
-// parseInline).
+// Marked quirk (verified by black-box probes): a just-formed inner
+// emphasis whose closer could both open and close blocks a later lone
+// closer from pairing with an inner opener when the opener's length
+// plus the inner closer's length is a multiple of 3. E.g. in
+// "**a *b*c* d**" the inner "*b*" closer (len 1) blocks the lone "*"
+// from the opening "**" (2+1=3), so the outer "**" pairs with the
+// final "**" instead. The block is recorded on the em node itself
+// (_closerBoth/_closerLen) so it only applies while that node sits
+// between the opener and the closer, never leaking across unrelated
+// pairs. A len-1 closer blocked this way stays literal; a len>=2
+// closer may still reach the outermost opener.
 function processEmphasis(nodes, delims) {
   let i = 0;
   while (i < delims.length) {
     const closer = delims[i];
     if (!closer.canClose || closer.len === 0) { i++; continue; }
+    let outermostIdx = -1;
+    for (let j = 0; j < i; j++) {
+      const op = delims[j];
+      if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
+      outermostIdx = j;
+      break;
+    }
     let openerIdx = -1;
+    let blockedLiteral = false;
     for (let j = i - 1; j >= 0; j--) {
       const op = delims[j];
       if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
       if ((op.canOpen && op.canClose) || (closer.canOpen && closer.canClose)) {
         if ((op.len + closer.len) % 3 === 0 && (op.len % 3 !== 0 || closer.len % 3 !== 0)) continue;
       }
+      const isOutermost = j === outermostIdx;
+      if (!(closer.len >= 2 && isOutermost)) {
+        const opIdx = nodes.indexOf(op.node);
+        const clIdx = nodes.indexOf(closer.node);
+        let blocked = false;
+        if (opIdx !== -1 && clIdx !== -1 && clIdx > opIdx) {
+          for (let k = opIdx + 1; k < clIdx; k++) {
+            const nd = nodes[k];
+            if ((nd.t === 'em' || nd.t === 'strong') && nd._closerBoth) {
+              if ((op.len + nd._closerLen) % 3 === 0) { blocked = true; break; }
+            }
+          }
+        }
+        if (blocked) {
+          if (closer.len === 1) { blockedLiteral = true; break; }
+          continue;
+        }
+      }
+      // Failed-link suppression: inside link text whose link did not
+      // form, emphasis does not pair across a code span whose content
+      // holds a backtick (marked quirk; doc-16/20/23). The opener and
+      // closer must sit in the same failed-link region.
       if (op.failedRegion !== undefined && closer.failedRegion !== undefined && op.failedRegion === closer.failedRegion) {
         const opIdx = nodes.indexOf(op.node);
         const clIdx = nodes.indexOf(closer.node);
@@ -1969,6 +2011,7 @@ function processEmphasis(nodes, delims) {
       openerIdx = j;
       break;
     }
+    if (blockedLiteral) { i++; continue; }
     if (openerIdx === -1) { i++; continue; }
     const opener = delims[openerIdx];
     const use = opener.ch === '~' ? Math.min(opener.len, closer.len) : (opener.len >= 2 && closer.len >= 2) ? 2 : 1;

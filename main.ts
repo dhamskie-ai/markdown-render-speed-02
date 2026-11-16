@@ -40,6 +40,14 @@ const slowest = timings
   .map((ms, k) => ({ id: cases[k].id, ms }))
   .sort((a, b) => b.ms - a.ms)
   .slice(0, 3);
-console.error(`FastMark: total ${Date.now() - runStart}ms, slowest: ${slowest.map((s) => `${s.id}=${s.ms}ms`).join(', ')}`);
+// Median render time is what the competition grades against marked, so
+// report it alongside the total: a low median with a high total means a
+// few pathological cases, not a generally slow parser.
+const sorted = [...timings].sort((a, b) => a - b);
+const median = sorted.length % 2 === 0
+  ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+  : sorted[Math.floor(sorted.length / 2)];
+const ok = cases.length - failures;
+console.error(`FastMark: total ${Date.now() - runStart}ms, slowest: ${slowest.map((s) => `${s.id}=${s.ms}ms`).join(', ')}, rendered ${ok}/${cases.length}, median ${median}ms/case`);
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(join(outputDir, 'html.json'), JSON.stringify(rendered));

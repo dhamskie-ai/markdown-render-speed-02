@@ -12,6 +12,9 @@ A few behaviours are only visible in long documents, where earlier state changes
 
 - **Tabs in containers.** A blockquote resets the tab column to its own leading indent plus 2, discarding whatever list items outside it contributed; a list item adds its indent. A tab in fenced-code content expands from that column plus the fence's own indent, and only when the line passed through a container.
 - **GFM autolinks.** An inline HTML `<a ...>` start tag suppresses later extended autolinks in the document until a literal `</a>`; an email followed by `_` or `-` backtracks one domain label unless that `_` closes emphasis; the local part holds only letters, digits, and `. + - _`.
+- **Tilde fences.** A `~~~` fence never strips its opening indent from content lines; a `` ``` `` fence strips up to its indent.
+- **Backticks in link text.** A code span whose content holds a backtick run of a different length than its own delimiter kills the link, unless the span is the last thing before `]`; a backtick run following an unmatched opener loosely closes it instead of starting a new span. Inside link text whose link did not form, emphasis does not pair across a code span whose content holds a backtick.
+- **Table rows.** A row splits on every `|` that is not backslash-escaped, even one inside backticks; only `\|` stays literal.
 
 <!-- Rebuilt in a recorded session for round 2. -->
 
