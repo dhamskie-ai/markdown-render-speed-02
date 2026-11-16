@@ -1305,10 +1305,13 @@ function findClosingBracket(src, i) {
       while (j + n < src.length && src[j + n] === '`') n++;
       const end = findCodeSpanEnd(src, j + n, n);
       if (end !== -1) {
-        // A code span that swallows the link destination '](' cannot be a
-        // code span inside this link text: the ']' before it closes the
-        // link. Do not skip such a span; let the ']' be found normally.
-        if (src.slice(j, end).includes('](')) { j += n; continue; }
+        // A code span that swallows the link destination '](' AND spans
+        // a newline cannot be a code span inside this link text: the ']'
+        // before it closes the link. Do not skip such a span; let the
+        // ']' be found normally. A single-line span containing '](' is
+        // a real code span and protects the ']' inside it.
+        const spanText = src.slice(j, end);
+        if (spanText.includes('](') && spanText.includes('\n')) { j += n; continue; }
         sawCodeSpan = true;
         openTick = false;
         j = end;
