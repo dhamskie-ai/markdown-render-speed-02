@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
 // FastMark driver: reads every case, renders it with parse, writes html.json.
+// Note on the render contract: a whitespace-only line inside a fenced code
+// block keeps the container indent rules of the block that holds it —
+// parse.js expands the line's tabs from their absolute column and then
+// strips the list-item indent Phase 1 skipped for blank lines, so a
+// tab-only line in a fenced block inside a list item renders as spaces,
+// never as a literal tab. The driver itself does no tab handling; it
+// only feeds each case to parse() and collects the HTML.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from './parse.js';

@@ -352,13 +352,39 @@ function parseBlocks(lines, refs, endsWithNewline) {
       const leaf = stack[stack.length - 1];
       if (leaf.t === 'code') {
         if (leaf.fenced) {
-          const ind = countIndent(ln);
           // Tilde fences never strip the opening fence's indent from
           // content (marked quirk, verified by black-box probes);
           // backtick fences strip up to fenceInd.
           const effInd = leaf.fenceChar === '~' ? 0 : (leaf.fenceInd || 0);
-          advanceCols(ln, Math.min(ind, effInd));
-          leaf.lines.push(ln.s.slice(ln.i));
+          // A whitespace-only line inside a fenced code block: Phase 1
+          // skips the list-item indent for blank lines, so strip it
+          // here the way marked does — expand the line's tabs from
+          // their absolute column first, then cut the skipped item
+          // indent (a tab is expanded, never dropped, by this cut).
+          // The fence's own indent is then stripped the way non-blank
+          // lines strip it (a tab the strip lands on vanishes), and
+          // when a container was consumed (e.g. a blockquote) the
+          // remaining leading tabs expand from the tab base.
+          let itemSkip = 0;
+          for (let k = 1; k < stack.length; k++) {
+            if (stack[k].t === 'item') itemSkip += stack[k].indent;
+          }
+          if (itemSkip > 0) {
+            let content = expandTabs(ln.s.slice(ln.i), ln.col);
+            content = content.slice(Math.min(itemSkip, content.length));
+            content = content.slice(Math.min(effInd, content.length));
+            leaf.lines.push(content);
+          } else if (effInd > 0) {
+            const ind = countIndent(ln);
+            advanceColsDropTab(ln, Math.min(ind, effInd));
+            let content = ln.s.slice(ln.i);
+            if (ln.tabBaseSet) content = expandLeadingTabs(content, ln.tabBase + effInd);
+            leaf.lines.push(content);
+          } else if (ln.tabBaseSet) {
+            leaf.lines.push(expandLeadingTabs(ln.s.slice(ln.i), ln.tabBase + effInd));
+          } else {
+            leaf.lines.push(ln.s.slice(ln.i));
+          }
         } else {
           leaf.lines.push(ln.s.slice(ln.i));
         }
