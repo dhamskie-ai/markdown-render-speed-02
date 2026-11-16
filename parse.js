@@ -542,8 +542,9 @@ function parseDelimRow(text) {
   return out;
 }
 
-// Split a table row line into trimmed cells. Pipes escaped with a backslash
-// and pipes inside code spans do not separate cells.
+// Split a table row line into trimmed cells. Only a backslash-escaped
+// pipe does not separate cells; marked splits on every other '|', even
+// one inside backticks (verified by black-box probes).
 function parseTableRow(text) {
   let start = 0, end = text.length;
   while (start < end && (text[start] === ' ' || text[start] === '\t')) start++;
@@ -553,35 +554,13 @@ function parseTableRow(text) {
   if (s.endsWith('|')) s = s.slice(0, -1);
   const cells = [];
   let cur = '';
-  let codeLen = 0; // >0 while inside a code span of this backtick length
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (c === '\\' && i + 1 < s.length) {
       if (s[i + 1] === '|') { cur += '|'; i++; continue; }
       cur += c + s[i + 1]; i++; continue;
     }
-    if (c === '`') {
-      let n = 0;
-      while (i + n < s.length && s[i + n] === '`') n++;
-      if (codeLen === 0) {
-        // Only enter a code span when a matching closer exists later;
-        // otherwise the backticks are literal text and '|' still splits.
-        let found = false;
-        for (let k = i + n; k < s.length; k++) {
-          if (s[k] === '`') {
-            let m = 0;
-            while (k + m < s.length && s[k + m] === '`') m++;
-            if (m === n) { found = true; break; }
-            k += m - 1;
-          }
-        }
-        if (found) codeLen = n;
-      } else if (n === codeLen) codeLen = 0;
-      cur += s.slice(i, i + n);
-      i += n - 1;
-      continue;
-    }
-    if (c === '|' && codeLen === 0) { cells.push(cur.trim()); cur = ''; continue; }
+    if (c === '|') { cells.push(cur.trim()); cur = ''; continue; }
     cur += c;
   }
   cells.push(cur.trim());
