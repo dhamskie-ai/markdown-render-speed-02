@@ -213,11 +213,13 @@ function parseBlocks(lines, refs, endsWithNewline) {
   const stack = [doc];
   for (let li = 0; li < lines.length; li++) {
     const ln = { s: lines[li], i: 0, col: 0, tabBase: 0, tabBaseSet: false };
-    // tabBase is the column marked counts a leading tab from: the
-    // outermost blockquote counts as its leading indent plus 2 (the '>'
-    // and its following space slot), a deeper quote adds only its
-    // leading indent, and a list item adds its indent. tabBaseSet is
-    // true once any container was consumed on this line.
+    // tabBase is the column marked counts a leading tab from. A
+    // blockquote level SETS it to its leading indent plus 2 (the '>'
+    // and its following space slot), discarding whatever containers
+    // before it contributed: marked re-lexes a quote's inner text on
+    // its own, so a list item outside the quote does not count. A list
+    // item ADDS its indent. tabBaseSet is true once any container was
+    // consumed on this line.
     // Whether the line after this one is blank (or we are at EOF without a
     // trailing newline): an HTML block ending on this line gets no trailing
     // newline in that case.
@@ -244,12 +246,11 @@ function parseBlocks(lines, refs, endsWithNewline) {
           advanceCols(ln, ind);
           if (ln.s[ln.i] === '>') {
             ln.i++; ln.col++;
-            // The outermost blockquote counts as its leading indent
-            // plus 2 for the tab column; a deeper quote adds only its
-            // leading indent.
+            // A quote SETS the tab column to its leading indent plus
+            // 2, discarding what earlier containers contributed.
             const outermost = !ln.tabBaseSet;
-            if (outermost) { ln.tabBase = ind + 2; ln.tabBaseSet = true; }
-            else ln.tabBase += ind;
+            ln.tabBase = ind + 2;
+            ln.tabBaseSet = true;
             // Only the outermost quote may spend a tab as its one
             // optional space; a deeper quote leaves the tab for the
             // content, where it expands from tabBase instead.
@@ -944,13 +945,12 @@ function openNewBlocks(ln, stack, refs, lazy) {
         ensureNotListTop(stack, refs);
         closePara(stack, refs);
         ln.i++; ln.col++;
-        // The outermost blockquote counts as its leading indent plus 2
-        // for the tab column; a deeper quote adds only its leading
-        // indent. Only the outermost quote may spend a tab as its one
-        // optional space.
+        // A quote SETS the tab column to its leading indent plus 2,
+        // discarding what earlier containers contributed. Only the
+        // outermost quote may spend a tab as its one optional space.
         const outermost = !ln.tabBaseSet;
-        if (outermost) { ln.tabBase = ind + 2; ln.tabBaseSet = true; }
-        else ln.tabBase += ind;
+        ln.tabBase = ind + 2;
+        ln.tabBaseSet = true;
         if (ln.s[ln.i] === ' ') { ln.i++; ln.col++; }
         else if (ln.s[ln.i] === '\t' && outermost) skipOneSpace(ln);
         const q = newBlock('quote');
