@@ -1900,39 +1900,11 @@ function formEmphasis(nodes, delims, oi, ci, use) {
 
 // Walk the delimiter list left to right, pairing each closer with the
 // nearest earlier opener of the same character.
-//
-// Marked quirk (verified by black-box probes): when an inner pair has
-// just closed with a closer that could both open and close emphasis,
-// the next closer cannot pair with an opener whose length plus that
-// inner closer's length is a multiple of 3. E.g. in
-// "**a *b*c* d**" the inner "*b*" closer (len 1, flanking a letter)
-// blocks the lone "*" from pairing with the opening "**" (2+1=3), so
-// the outer "**" pairs with the final "**" instead; in
-// "*a *b*c* d" the same inner closer does not block (1+1=2). The
-// block applies to the nearest opener only, and once it fires the
-// closer stays literal.
 function processEmphasis(nodes, delims) {
   let i = 0;
-  let lastBothLen = 0;
   while (i < delims.length) {
     const closer = delims[i];
     if (!closer.canClose || closer.len === 0) { i++; continue; }
-    // Find the nearest opener, to test the inner-closer block first.
-    let nearestIdx = -1;
-    for (let j = i - 1; j >= 0; j--) {
-      const op = delims[j];
-      if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
-      nearestIdx = j;
-      break;
-    }
-    if (nearestIdx !== -1 && lastBothLen > 0) {
-      const nearest = delims[nearestIdx];
-      if ((nearest.len + lastBothLen) % 3 === 0) {
-        lastBothLen = 0;
-        i++;
-        continue;
-      }
-    }
     let openerIdx = -1;
     for (let j = i - 1; j >= 0; j--) {
       const op = delims[j];
@@ -1943,13 +1915,10 @@ function processEmphasis(nodes, delims) {
       openerIdx = j;
       break;
     }
-    if (openerIdx === -1) { lastBothLen = 0; i++; continue; }
+    if (openerIdx === -1) { i++; continue; }
     const opener = delims[openerIdx];
-    const closerLenBefore = closer.len;
-    const closerBoth = closer.canOpen && closer.canClose;
     const use = opener.ch === '~' ? Math.min(opener.len, closer.len) : (opener.len >= 2 && closer.len >= 2) ? 2 : 1;
     i = formEmphasis(nodes, delims, openerIdx, i, use);
-    lastBothLen = closerBoth ? closerLenBefore : 0;
   }
 }
 
