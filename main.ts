@@ -7,6 +7,15 @@
 // tab-only line in a fenced block inside a list item renders as spaces,
 // never as a literal tab. The driver itself does no tab handling; it
 // only feeds each case to parse() and collects the HTML.
+// Note on list items around fenced code: an item stays open for a line
+// below its indent only when the line is really code content — parse.js
+// simulates the remaining containers first, so a line that drops an
+// open blockquote (no '>' on it) ends the item and rejoins the parent
+// list instead of nesting a new list inside the item.
+// Note on bare-URL autolinks: a '(' in the URL survives only when a ')'
+// follows it, the first ')' after the last '(' always ends the paren
+// part, and a later ')' survives only when more content follows it —
+// parse.js trims autolink ends by that rule, not by counting parens.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from './parse.js';

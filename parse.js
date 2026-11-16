@@ -208,6 +208,53 @@ function newBlock(t) {
   return { t, children: [], lastBlank: false };
 }
 
+// Can the line (at ln's current position) still reach the fenced code
+// block starting from stack index k? Simulates Phase 1 on scratch line
+// copies, never mutating ln: a list always matches; an item may be
+// skipped (the inFenced rule) or consumed when its indent matches; a
+// quote needs its '>' within three columns. A line that drops a
+// container between an item and the fence — e.g. no '>' for an open
+// quote — is not code content, so the item must end instead of sliding
+// past it. Recursion depth is bounded by the stack; each item tries at
+// most skip-then-consume, mirroring what real Phase 1 would do.
+function reachesCode(ln, stack, k) {
+  if (k >= stack.length) return false;
+  const b = stack[k];
+  if (b.t === 'code' && b.fenced) return true;
+  if (b.t === 'list') return reachesCode(ln, stack, k + 1);
+  if (b.t === 'item') {
+    if (isBlankRemainder(ln)) {
+      if (b.children.length === 0) return false;
+      return reachesCode(ln, stack, k + 1);
+    }
+    // Skip the item (inFenced rule): the line may still be code content.
+    if (reachesCode(ln, stack, k + 1)) return true;
+    // Or consume the item indent and continue.
+    const ind = countIndent(ln);
+    if (ind >= b.indent) {
+      const s2 = { s: ln.s, i: ln.i, col: ln.col, tabBase: ln.tabBase, tabBaseSet: ln.tabBaseSet };
+      advanceCols(s2, b.indent);
+      if (reachesCode(s2, stack, k + 1)) return true;
+    }
+    return false;
+  }
+  if (b.t === 'quote') {
+    const ind = countIndent(ln);
+    if (ind > 3) return false;
+    const s2 = { s: ln.s, i: ln.i, col: ln.col, tabBase: ln.tabBase, tabBaseSet: ln.tabBaseSet };
+    advanceCols(s2, ind);
+    if (s2.s[s2.i] !== '>') return false;
+    s2.i++; s2.col++;
+    const outermost = !s2.tabBaseSet;
+    s2.tabBase = ind + 2;
+    s2.tabBaseSet = true;
+    if (s2.s[s2.i] === ' ') { s2.i++; s2.col++; }
+    else if (s2.s[s2.i] === '\t' && outermost) skipOneSpace(s2);
+    return reachesCode(s2, stack, k + 1);
+  }
+  return false;
+}
+
 function parseBlocks(lines, refs, endsWithNewline) {
   const doc = newBlock('doc');
   const stack = [doc];
@@ -285,6 +332,11 @@ function parseBlocks(lines, refs, endsWithNewline) {
           // stays empty and the item ends.
           const leaf = stack[stack.length - 1];
           if (leaf.t === 'code' && leaf.fenced && leaf.lines.length === 0) break;
+          // A non-empty fence keeps the item open only for a line that
+          // is really code content: if the line drops a container
+          // between here and the fence (no '>' for an open quote),
+          // the item ends and the line starts fresh at the parent list.
+          if (!reachesCode(ln, stack, j + 1)) break;
           j++;
           continue;
         }
@@ -1590,6 +1642,52 @@ function tryHtmlInline(src, i) {
 // is kept only when it closes a valid entity reference).
 const HTML_ENTITIES = new Set(('amp lt gt quot apos nbsp copy reg trade hellip mdash ndash laquo raquo deg plusmn sup2 sup3 acute micro para middot cedil ordm ordf iexcl iquest cent pound curren yen brvbar sect uml shy macr times divide minus lowast radic prop infin ang and or cap cup int there4 sim cong asymp ne equiv le ge sub sup nsub sube supe oplus otimes perp sdot lceil rceil lfloor rfloor lang rang loz spades clubs hearts diams bull prime Prime oline frasl weierp image real alefsym larr uarr rarr darr harr crarr lArr uArr rArr dArr hArr forall part exist empty nabla isin notin ni prod sum agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml oslash ugrave uacute ucirc uuml yacute yuml szlig alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho Sigma Tau Upsilon Phi Chi Psi Omega ouml auml uuml euml iuml Ouml Auml Uuml Euml Iuml Oslash oslash Yuml yuml fnof circ tilde ensp emsp thinsp zwnj zwj lrm rlm euro').split(' '));
 
+// Where does an extended autolink's URL end, paren-wise, within s[0..end)?
+// Marked's rule, reverse-engineered from black-box probes: a '(' survives
+// only when a ')' follows it somewhere (otherwise the URL is cut before
+// it); the first ')' after the last '(' always ends the paren part, and
+// any later ')' survives only when a non-paren character follows it
+// somewhere. Everything before that first ')' is kept as-is.
+function autolinkParenEnd(s, end) {
+  for (let i = 0; i < end; i++) {
+    if (s[i] === '(') {
+      let hasClose = false;
+      for (let k = i + 1; k < end; k++) { if (s[k] === ')') { hasClose = true; break; } }
+      if (!hasClose) { end = i; break; }
+    }
+  }
+  const hasNonParenAfter = (i) => {
+    for (let j = i + 1; j < end; j++) {
+      if (s[j] !== '(' && s[j] !== ')') return true;
+    }
+    return false;
+  };
+  let lastOpen = -1;
+  for (let i = end - 1; i >= 0; i--) { if (s[i] === '(') { lastOpen = i; break; } }
+  let e;
+  if (lastOpen === -1) {
+    e = 0;
+    while (e < end) {
+      if (s[e] === ')') {
+        if (hasNonParenAfter(e)) e++;
+        else break;
+      } else e++;
+    }
+    return e;
+  }
+  let r1 = -1;
+  for (let i = lastOpen + 1; i < end; i++) { if (s[i] === ')') { r1 = i; break; } }
+  if (r1 === -1) return end;
+  e = r1 + 1;
+  while (e < end) {
+    if (s[e] === ')') {
+      if (hasNonParenAfter(e)) e++;
+      else break;
+    } else e++;
+  }
+  return e;
+}
+
 function trimAutolinkEnd(s) {
   let end = s.length;
   let changed = true;
@@ -1611,15 +1709,11 @@ function trimAutolinkEnd(s) {
       end--;
       changed = true;
     }
-    while (end > 0 && s[end - 1] === ')') {
-      let open = 0, close = 0;
-      for (let k = 0; k < end; k++) {
-        if (s[k] === '(') open++;
-        else if (s[k] === ')') close++;
-      }
-      if (close > open) { end--; changed = true; }
-      else break;
-    }
+    // Parens: the URL's paren part ends where autolinkParenEnd says —
+    // a '(' needs a ')' after it, the first ')' past the last '(' is
+    // always kept, later ')'s only when more content follows them.
+    const pEnd = autolinkParenEnd(s, end);
+    if (pEnd < end) { end = pEnd; changed = true; }
   }
   return s.slice(0, end);
 }
