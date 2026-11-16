@@ -1351,6 +1351,51 @@ function findCodeSpanEnd(src, start, n) {
   return -1;
 }
 
+// Does the text in src[textStart, textEnd) contain a backtick run with
+// no matching closer of the same length inside the text? A run that
+// closes a code span is skipped (with its content); a run with no closer
+// is unmatched. Backslash-escaped backticks do not count.
+function linkTextHasUnmatchedBacktick(src, textStart, textEnd) {
+  let j = textStart;
+  while (j < textEnd) {
+    if (src[j] === '\\' && j + 1 < textEnd && isPunctChar(src[j + 1])) { j += 2; continue; }
+    if (src[j] === '`') {
+      let n = 0;
+      while (j + n < textEnd && src[j + n] === '`') n++;
+      let k = j + n;
+      let found = -1;
+      while (k < textEnd) {
+        if (src[k] === '\\' && k + 1 < textEnd && isPunctChar(src[k + 1])) { k += 2; continue; }
+        if (src[k] === '`') {
+          let m = 0;
+          while (k + m < textEnd && src[k + m] === '`') m++;
+          if (m === n) { found = k + m; break; }
+          k += m;
+        } else k++;
+      }
+      if (found === -1) return true;
+      j = found;
+    } else j++;
+  }
+  return false;
+}
+
+// Index of the first backtick run at or after fromPos that closes a code
+// span (has a matching run of the same length later), or -1.
+function findNextCodeSpanStart(src, fromPos) {
+  let j = fromPos;
+  while (j < src.length) {
+    if (src[j] === '\\' && j + 1 < src.length && isPunctChar(src[j + 1])) { j += 2; continue; }
+    if (src[j] === '`') {
+      let n = 0;
+      while (j + n < src.length && src[j + n] === '`') n++;
+      if (findCodeSpanEnd(src, j + n, n) !== -1) return j;
+      j += n;
+    } else j++;
+  }
+  return -1;
+}
+
 // Find the ']' matching the '[' at src[i], counting brackets only
 // (backslash escapes skipped, code spans ignored). Used only to mark
 // failed-link regions for emphasis suppression; findClosingBracket
@@ -1860,6 +1905,11 @@ function parseInline(src, refs, noExtAutolink) {
   // closingBracket]. Emphasis around a code span whose content holds a
   // backtick does not form inside such a region (marked quirk).
   const failedRegions = [];
+  // Regions after a link whose text holds an unmatched backtick run:
+  // [endOfLink, startOfNextCodeSpan). Emphasis delimiters inside such a
+  // region are inert (marked quirk; doc-09/16/28/35). No code span after
+  // the link means no suppression at all.
+  const suppressRegions = [];
   let i = 0;
   const n = src.length;
   let text = '';
@@ -1897,7 +1947,15 @@ function parseInline(src, refs, noExtAutolink) {
     }
     if (c === '!' && src[i + 1] === '[') {
       const res = tryParseLink(src, i + 1, refs, true);
-      if (res) { flush(); nodes.push(res.node); i = res.end; continue; }
+      if (res) {
+        flush(); nodes.push(res.node);
+        const closeIdx = findBracketEndSimple(src, i + 1);
+        if (closeIdx !== -1 && linkTextHasUnmatchedBacktick(src, i + 2, closeIdx)) {
+          const codeStart = findNextCodeSpanStart(src, res.end);
+          if (codeStart !== -1) suppressRegions.push([res.end, codeStart]);
+        }
+        i = res.end; continue;
+      }
       const close = findBracketEndSimple(src, i + 1);
       if (close !== -1) failedRegions.push([i + 1, close]);
       text += '!';
@@ -1906,7 +1964,15 @@ function parseInline(src, refs, noExtAutolink) {
     }
     if (c === '[') {
       const res = tryParseLink(src, i, refs, false);
-      if (res) { flush(); nodes.push(res.node); i = res.end; continue; }
+      if (res) {
+        flush(); nodes.push(res.node);
+        const closeIdx = findBracketEndSimple(src, i);
+        if (closeIdx !== -1 && linkTextHasUnmatchedBacktick(src, i + 1, closeIdx)) {
+          const codeStart = findNextCodeSpanStart(src, res.end);
+          if (codeStart !== -1) suppressRegions.push([res.end, codeStart]);
+        }
+        i = res.end; continue;
+      }
       const close = findBracketEndSimple(src, i);
       if (close !== -1) failedRegions.push([i, close]);
       text += '[';
@@ -1936,6 +2002,12 @@ function parseInline(src, refs, noExtAutolink) {
       const delim = { ch: c, node, len: m, canOpen, canClose, after: afterCh };
       for (const r of failedRegions) {
         if (i >= r[0] && i <= r[1]) { delim.failedRegion = r[0]; break; }
+      }
+      // Inside a backtick-link suppression region (see suppressRegions
+      // above) the delimiter is inert: it renders literally and can
+      // neither open nor close emphasis.
+      for (const r of suppressRegions) {
+        if (i >= r[0] && i < r[1]) { delim.canOpen = false; delim.canClose = false; break; }
       }
       delims.push(delim);
       i += m;
