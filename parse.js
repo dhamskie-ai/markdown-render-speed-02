@@ -1888,12 +1888,31 @@ function formEmphasis(nodes, delims, oi, ci, use) {
   const clIdx = nodes.indexOf(clNode);
   const children = nodes.slice(opIdx + 1, clIdx);
   const emNode = { t: opener.ch === '~' ? 'del' : (use === 2 ? 'strong' : 'em'), children };
+  // Remember whether the closer could both open and close, and its
+  // length: a just-formed inner pair whose closer could do both blocks
+  // a later lone closer from pairing with an inner opener (marked
+  // quirk, verified by black-box probes).
+  emNode._closerBoth = closer.canOpen && closer.canClose;
+  emNode._closerLen = closer.len;
   opener.len -= use;
   closer.len -= use;
   const replacement = [];
   if (opener.len > 0) { opNode.s = opNode.s.slice(0, opener.len); replacement.push(opNode); }
   replacement.push(emNode);
-  if (closer.len > 0) { clNode.s = clNode.s.slice(clNode.s.length - closer.len); replacement.push(clNode); }
+  if (closer.len > 0) {
+    // Leftover delimiter characters of a strong closer ("*" from
+    // "***"): they stay inside the strong when an inner emphasis
+    // whose closer could both open and close sits inside it (marked
+    // quirk, e.g. "**a *b*c***" -> "<strong>a <em>b</em>c*</strong>");
+    // otherwise they fall outside ("**a *b* c***" ->
+    // "<strong>a <em>b</em> c</strong>*").
+    const innerBoth = use === 2 && children.some(nd => (nd.t === 'em' || nd.t === 'strong') && nd._closerBoth);
+    if (innerBoth) {
+      emNode.children.push({ t: 'text', s: clNode.s.slice(clNode.s.length - closer.len) });
+    } else {
+      clNode.s = clNode.s.slice(clNode.s.length - closer.len); replacement.push(clNode);
+    }
+  }
   nodes.splice(opIdx, clIdx - opIdx + 1, ...replacement);
   delims.splice(oi + 1, ci - oi - 1);
   let closerIdx = oi + 1;
@@ -1904,21 +1923,67 @@ function formEmphasis(nodes, delims, oi, ci, use) {
 
 // Walk the delimiter list left to right, pairing each closer with the
 // nearest earlier opener of the same character.
+//
+// Marked quirk (verified by black-box probes): a just-formed inner
+// emphasis whose closer could both open and close blocks a later lone
+// closer from pairing with an inner opener when the opener's length
+// plus the inner closer's length is a multiple of 3. E.g. in
+// "**a *b*c* d**" the inner "*b*" closer (len 1) blocks the lone "*"
+// from the opening "**" (2+1=3), so the outer "**" pairs with the
+// final "**" instead; in "*a *b*c* d" the same inner closer does not
+// block (1+1=2). The block never stops a len>=2 closer from reaching
+// the outermost opener (so "**...**" still forms its strong), and a
+// len-1 closer blocked from its nearest opener stays literal.
 function processEmphasis(nodes, delims) {
   let i = 0;
   while (i < delims.length) {
     const closer = delims[i];
     if (!closer.canClose || closer.len === 0) { i++; continue; }
+    // The outermost opener for this closer: the earliest candidate in
+    // the list. A len>=2 closer may always reach it; a len-1 closer
+    // blocked from its nearest opener stays literal.
+    let outermostIdx = -1;
+    for (let j = 0; j < i; j++) {
+      const op = delims[j];
+      if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
+      outermostIdx = j;
+      break;
+    }
     let openerIdx = -1;
+    let blockedLiteral = false;
     for (let j = i - 1; j >= 0; j--) {
       const op = delims[j];
       if (op.ch !== closer.ch || !op.canOpen || op.len === 0) continue;
       if ((op.canOpen && op.canClose) || (closer.canOpen && closer.canClose)) {
         if ((op.len + closer.len) % 3 === 0 && (op.len % 3 !== 0 || closer.len % 3 !== 0)) continue;
       }
+      // Inner-pair block: an em/strong node between this opener and the
+      // closer, formed from a closer that could both open and close,
+      // blocks the pairing when (opener.len + innerCloser.len) is a
+      // multiple of 3. It never blocks the outermost opener for a
+      // len>=2 closer.
+      const isOutermost = j === outermostIdx;
+      if (!(closer.len >= 2 && isOutermost)) {
+        const opIdx = nodes.indexOf(op.node);
+        const clIdx = nodes.indexOf(closer.node);
+        let blocked = false;
+        if (opIdx !== -1 && clIdx !== -1 && clIdx > opIdx) {
+          for (let k = opIdx + 1; k < clIdx; k++) {
+            const nd = nodes[k];
+            if ((nd.t === 'em' || nd.t === 'strong') && nd._closerBoth) {
+              if ((op.len + nd._closerLen) % 3 === 0) { blocked = true; break; }
+            }
+          }
+        }
+        if (blocked) {
+          if (closer.len === 1) { blockedLiteral = true; break; }
+          continue;
+        }
+      }
       openerIdx = j;
       break;
     }
+    if (blockedLiteral) { i++; continue; }
     if (openerIdx === -1) { i++; continue; }
     const opener = delims[openerIdx];
     const use = opener.ch === '~' ? Math.min(opener.len, closer.len) : (opener.len >= 2 && closer.len >= 2) ? 2 : 1;
