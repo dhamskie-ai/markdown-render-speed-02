@@ -334,10 +334,10 @@ function parseBlocks(lines, refs, endsWithNewline) {
     if (!lazy) {
       while (stack.length > j) {
         const popped = stack.pop();
-        // An HTML block closed because its container ends on a blank
-        // line gets no trailing newline; one closed on a content line
-        // keeps it.
-        if (popped.t === 'html') popped.noTrail = isBlankRemainder(ln);
+        // An HTML block closed because its container ends gets no
+        // trailing newline: the container's closing tag follows it
+        // directly.
+        if (popped.t === 'html') popped.noTrail = true;
         finalize(popped, stack[stack.length - 1], refs);
       }
     }
