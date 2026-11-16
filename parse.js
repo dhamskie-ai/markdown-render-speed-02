@@ -1325,6 +1325,10 @@ function findClosingBracket(src, i) {
     if (c === '`') {
       let n = 0;
       while (j + n < src.length && src[j + n] === '`') n++;
+      // A run that follows an unmatched opener loosely closes it,
+      // whatever its length; it does not start a new code span (so a
+      // span cannot swallow the ']' that closes this link text).
+      if (openTick) { openTick = false; j += n; continue; }
       const end = findCodeSpanEnd(src, j + n, n);
       if (end !== -1) {
         // A code span that swallows the link destination '](' AND spans
@@ -1356,13 +1360,12 @@ function findClosingBracket(src, i) {
         j = end;
         continue;
       }
-      // No same-length closer. A run that follows an unmatched opener
-      // loosely closes it; a run with no backtick after it at all (and
-      // no code span closed yet) leaves the link text unterminated.
-      // A stray backtick AFTER a closed code span is literal text and
-      // does not kill the link (doc-05/10/33 form their links this
-      // way); a stray backtick with no code span closed yet does.
-      if (openTick) { openTick = false; j += n; continue; }
+      // No same-length closer. A run with no backtick after it at all
+      // (and no code span closed yet) leaves the link text
+      // unterminated. A stray backtick AFTER a closed code span is
+      // literal text and does not kill the link (doc-05/10/33 form
+      // their links this way); a stray backtick with no code span
+      // closed yet does.
       let laterTick = false;
       for (let k = j + n; k < src.length; k++) {
         if (src[k] === '`') { laterTick = true; break; }
