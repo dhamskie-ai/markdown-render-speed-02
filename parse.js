@@ -353,7 +353,11 @@ function parseBlocks(lines, refs, endsWithNewline) {
       if (leaf.t === 'code') {
         if (leaf.fenced) {
           const ind = countIndent(ln);
-          advanceCols(ln, Math.min(ind, leaf.fenceInd || 0));
+          // Tilde fences never strip the opening fence's indent from
+          // content (marked quirk, verified by black-box probes);
+          // backtick fences strip up to fenceInd.
+          const effInd = leaf.fenceChar === '~' ? 0 : (leaf.fenceInd || 0);
+          advanceCols(ln, Math.min(ind, effInd));
           leaf.lines.push(ln.s.slice(ln.i));
         } else {
           leaf.lines.push(ln.s.slice(ln.i));
@@ -426,7 +430,7 @@ function parseBlocks(lines, refs, endsWithNewline) {
         }
         ln.i = saveI; ln.col = saveCol;
       }
-      const strip = Math.min(ind, leaf.fenceInd || 0);
+      const strip = Math.min(ind, leaf.fenceChar === '~' ? 0 : (leaf.fenceInd || 0));
       advanceColsDropTab(ln, strip);
       let content = ln.s.slice(ln.i);
       // Expand leading tabs the way marked does, but only when the line
